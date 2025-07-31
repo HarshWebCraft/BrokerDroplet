@@ -264,7 +264,7 @@ cron.schedule("*/60 * * * * *", async () => {
 
           try {
             const updateResult = await APIModel.updateOne(
-              { "Apis.ApiID": broker.clientId, XAlgoID: user.XalgoID },
+              { "Apis.ApiID": broker.clientId, XAlgoID: "XalgoID" },
               { $set: { "Apis.$.IsActive": shouldBeActive } }
             );
             if (updateResult.matchedCount === 0) {
@@ -388,7 +388,7 @@ cron.schedule("*/60 * * * * *", async () => {
           } else {
             canActivate = index < totalAPI;
           }
-          const plain = { ...broker, canActivate };
+          const plain = { ...broker, canActivate: true };
           result.push(plain);
 
           console.log(
