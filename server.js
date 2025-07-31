@@ -313,7 +313,17 @@ cron.schedule("*/60 * * * * *", async () => {
         // Filter valid subscriptions
         const validSubscriptions = subscriptions.filter((s) => {
           const accType = s.Account?.toLowerCase()?.replace(/\s+/g, "");
-          if (!accType || accType !== type) {
+          // For indianbroker, only match "Indian Broker" subscriptions
+          if (type === "indianbroker" && accType !== "indianbroker") {
+            console.log(
+              `❌ Subscription skipped for ${type}: Account=${
+                s.Account || "undefined"
+              } does not match`
+            );
+            return false;
+          }
+          // For other types, match exact account type
+          if (type !== "indianbroker" && accType !== type) {
             console.log(
               `❌ Subscription skipped for ${type}: Account=${
                 s.Account || "undefined"
@@ -380,21 +390,25 @@ cron.schedule("*/60 * * * * *", async () => {
           `🔍 Broker Type: ${type}, Total API slots: ${totalAPI}, Brokers: ${list.length}`
         );
 
-        list.forEach((broker, index) => {
-          let canActivate;
-          if (type === "indianbroker") {
-            // For IndianBroker, only allow canActivate for up to totalAPI brokers
-            canActivate = index < totalAPI;
-          } else {
-            canActivate = index < totalAPI;
-          }
-          const plain = { ...broker, canActivate: true };
-          result.push(plain);
-
-          console.log(
-            ` ➡ Broker ${broker.clientId} (${broker.broker}): index=${index}, totalAPI=${totalAPI}, canActivate=${canActivate}`
-          );
-        });
+        // Assign canActivate: false if no API slots are available
+        if (totalAPI === 0) {
+          list.forEach((broker) => {
+            const plain = { ...broker, canActivate: false };
+            result.push(plain);
+            console.log(
+              ` ➡ Broker ${broker.clientId} (${broker.broker}): No API slots, canActivate=false`
+            );
+          });
+        } else {
+          list.forEach((broker, index) => {
+            const canActivate = index < totalAPI;
+            const plain = { ...broker, canActivate };
+            result.push(plain);
+            console.log(
+              ` ➡ Broker ${broker.clientId} (${broker.broker}): index=${index}, totalAPI=${totalAPI}, canActivate=${canActivate}`
+            );
+          });
+        }
       }
 
       // Update user if needed
