@@ -2,13 +2,11 @@ const express = require("express");
 const cron = require("node-cron");
 const mongoose = require("mongoose");
 const moment = require("moment-timezone");
-const User = require("./models/users.js");
+const User = require("./models/User");
 const APIModel = require("./models/Api");
 const Subscription = require("./models/Subscription.js");
 const bodyParser = require("body-parser");
 const cors = require("cors");
-
-const PORT = process.env.PORT || 8000;
 
 const app = express();
 
@@ -24,7 +22,6 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.error(`CORS blocked for origin: ${origin}`);
         callback(new Error("Not allowed by CORS"));
       }
     },
@@ -81,9 +78,6 @@ app.get("/broker-status-stream/:email", (req, res) => {
 
   const clientList = sseClients.get(email);
   clientList.push(res);
-  console.log(
-    `SSE client connected for ${email}. Total clients: ${clientList.length}, Origin: ${req.headers.origin}`
-  );
 
   res.write(`data: ${JSON.stringify({ message: "Connected to SSE" })}\n\n`);
 
@@ -91,7 +85,6 @@ app.get("/broker-status-stream/:email", (req, res) => {
     try {
       res.write(`data: ${JSON.stringify({ message: "heartbeat" })}\n\n`);
     } catch (err) {
-      console.error(`❌ Heartbeat error for ${email}:`, err.message);
       clearInterval(heartbeatInterval);
       clientList.splice(clientList.indexOf(res), 1);
       if (clientList.length === 0) {
@@ -100,10 +93,6 @@ app.get("/broker-status-stream/:email", (req, res) => {
       res.end();
     }
   }, 10000);
-
-  req.on("error", (err) => {
-    console.error(`❌ Request error for ${email}: ${err.message}`);
-  });
 
   req.on("close", () => {
     clearInterval(heartbeatInterval);
@@ -115,21 +104,12 @@ app.get("/broker-status-stream/:email", (req, res) => {
     if (sseClients.get(email).length === 0) {
       sseClients.delete(email);
     }
-    console.log(
-      `SSE client disconnected for ${email}. Remaining clients: ${
-        sseClients.get(email)?.length || 0
-      }, Origin: ${req.headers.origin}`
-    );
     res.end();
   });
 });
 
 const notifyBrokerStatusUpdate = (email, brokerData) => {
   const clientList = sseClients.get(email) || [];
-  console.log(
-    `📤 Sending SSE notification for ${email}: dbUpdated=${brokerData.dbUpdated}, brokers=`,
-    brokerData.brokers
-  );
   clientList.forEach((client) => {
     try {
       client.write(`data: ${JSON.stringify(brokerData)}\n\n`);
@@ -155,40 +135,24 @@ const getTimezoneFromLabel = (label) => {
 };
 
 cron.schedule("*/60 * * * * *", async () => {
-  console.log(
-    "\n⏰ Cron started at",
-    moment().tz("Asia/Kolkata").format("HH:mm:ss")
-  );
-
   try {
     const users = await User.find({})
       .select("Email ListOfBrokers XalgoID")
       .lean();
 
     if (!users || users.length === 0) {
-      console.log("❌ No users found in the database");
       return;
     }
 
     for (const user of users) {
-      console.log(
-        `\n📦 Processing user: ${user.Email}, XalgoID: ${user.XalgoID}`
-      );
-
-      // Fetch subscriptions for the user
       const subscriptions = await Subscription.find({
         XalgoID: user.XalgoID,
       }).lean();
-      console.log(
-        `Subscriptions for ${user.Email}:`,
-        JSON.stringify(subscriptions, null, 2)
-      );
 
       let userNeedsUpdate = false;
       const brokers = [...(user.ListOfBrokers || [])];
       const updatedBrokers = [];
 
-      // Process isActive based on trading times
       for (let broker of brokers) {
         let shouldBeActive = broker.isActive;
         const tz = broker.tradingTimes?.[0]?.timezone
@@ -196,15 +160,7 @@ cron.schedule("*/60 * * * * *", async () => {
           : "Asia/Kolkata";
         const now = moment().tz(tz);
 
-        console.log(
-          `Checking trading times for ${broker.clientId} (Broker: ${broker.broker}):`,
-          broker.tradingTimes
-        );
-
         if (!broker.tradingTimes || broker.tradingTimes.length === 0) {
-          console.log(
-            `ℹ No trading times for ${broker.clientId}, preserving isActive=${broker.isActive}`
-          );
           updatedBrokers.push({ ...broker });
           continue;
         }
@@ -228,26 +184,10 @@ cron.schedule("*/60 * * * * *", async () => {
             second: 0,
           });
 
-          const remainingSeconds = end.diff(now, "seconds");
-          const untilStart = start.diff(now, "seconds");
-
-          console.log(
-            `Time window for ${broker.clientId}: ${start.format(
-              "HH:mm"
-            )} - ${end.format("HH:mm")} (Now: ${now.format("HH:mm:ss")})`
-          );
-
-          if (now.isSameOrAfter(start) && remainingSeconds >= 0) {
+          if (now.isSameOrAfter(start) && now.isBefore(end)) {
             isWithinTimeWindow = true;
             shouldBeActive = true;
-            console.log(
-              `✅ ${broker.clientId} is ACTIVE. Ends in ${remainingSeconds}s`
-            );
             break;
-          } else if (now.isBefore(start)) {
-            console.log(`🕒 ${broker.clientId} will start in ${untilStart}s`);
-          } else {
-            console.log(`❌ ${broker.clientId} is currently inactive.`);
           }
         }
 
@@ -256,28 +196,17 @@ cron.schedule("*/60 * * * * *", async () => {
         }
 
         if (broker.isActive !== shouldBeActive) {
-          console.log(
-            `➡ Updating ${broker.clientId} isActive from ${broker.isActive} → ${shouldBeActive}`
-          );
           broker.isActive = shouldBeActive;
           userNeedsUpdate = true;
 
           try {
             const updateResult = await APIModel.updateOne(
-              { "Apis.ApiID": broker.clientId, XAlgoID: "XalgoID" },
+              { "Apis.ApiID": broker.clientId, XAlgoID: user.XalgoID },
               { $set: { "Apis.$.IsActive": shouldBeActive } }
             );
             if (updateResult.matchedCount === 0) {
               console.error(
                 `❌ No matching ApiID ${broker.clientId} or XAlgoID ${user.XalgoID} in APIModel`
-              );
-            } else if (updateResult.modifiedCount === 0) {
-              console.error(
-                `❌ No changes applied for ${broker.clientId} in APIModel`
-              );
-            } else {
-              console.log(
-                `✅ APIModel updated for ${broker.clientId} (isActive=${shouldBeActive})`
               );
             }
           } catch (err) {
@@ -286,19 +215,14 @@ cron.schedule("*/60 * * * * *", async () => {
               err.message
             );
           }
-        } else {
-          console.log(
-            `ℹ No change in isActive for ${broker.clientId} (remains ${broker.isActive})`
-          );
         }
         updatedBrokers.push({ ...broker });
       }
 
-      // Subscription validation and canActivate assignment
+      // Subscription validation (for logging only)
       const grouped = {};
       updatedBrokers.forEach((b) => {
         let type = b.broker?.toLowerCase()?.replace(/\s+/g, "") || "unknown";
-        // Group Motilal and AngelOne as indianbroker
         if (type === "motilal" || type === "angelone") {
           type = "indianbroker";
         }
@@ -306,44 +230,23 @@ cron.schedule("*/60 * * * * *", async () => {
         grouped[type].push(b);
       });
 
-      const result = [];
       const now = moment();
-
       for (const [type, list] of Object.entries(grouped)) {
-        // Filter valid subscriptions
         const validSubscriptions = subscriptions.filter((s) => {
           const accType = s.Account?.toLowerCase()?.replace(/\s+/g, "");
-          // For indianbroker, only match "Indian Broker" subscriptions
           if (type === "indianbroker" && accType !== "indianbroker") {
-            console.log(
-              `❌ Subscription skipped for ${type}: Account=${
-                s.Account || "undefined"
-              } does not match`
-            );
             return false;
           }
-          // For other types, match exact account type
           if (type !== "indianbroker" && accType !== type) {
-            console.log(
-              `❌ Subscription skipped for ${type}: Account=${
-                s.Account || "undefined"
-              } does not match`
-            );
             return false;
           }
 
           if (!s.CreatedAt || !moment(s.CreatedAt).isValid()) {
-            console.log(
-              `❌ Subscription skipped for ${type}: Invalid CreatedAt=${s.CreatedAt}`
-            );
             return false;
           }
 
           const durationDays = parseInt(s.Duration, 10);
           if (isNaN(durationDays) || durationDays <= 0) {
-            console.log(
-              `❌ Subscription skipped for ${type}: Invalid Duration=${s.Duration}`
-            );
             return false;
           }
 
@@ -351,76 +254,32 @@ cron.schedule("*/60 * * * * *", async () => {
           const expiresAt = createdAt.clone().add(durationDays, "days");
           const isValid = now.isBefore(expiresAt);
 
-          if (!isValid) {
+          if (isValid) {
             console.log(
-              `❌ Subscription skipped for ${type}: ID=${
-                s._id
-              }, Expired at ${expiresAt.format(
-                "YYYY-MM-DD HH:mm:ss"
-              )} (Now: ${now.format("YYYY-MM-DD HH:mm:ss")})`
+              `✅ Valid subscription for ${type}: ID=${s._id}, NoOfAPI=${s.NoOfAPI}`
             );
-            return false;
           }
-
-          console.log(
-            `✅ Valid subscription for ${type}: ID=${s._id}, Account=${
-              s.Account
-            }, CreatedAt=${createdAt.format(
-              "YYYY-MM-DD HH:mm:ss"
-            )}, Duration=${durationDays}d, ExpiresAt=${expiresAt.format(
-              "YYYY-MM-DD HH:mm:ss"
-            )}, NoOfAPI=${s.NoOfAPI || "undefined"}`
-          );
-
-          return true;
+          return isValid;
         });
 
         const totalAPI = validSubscriptions.reduce((sum, s) => {
           const apiCount = parseInt(s.NoOfAPI, 10);
-          if (isNaN(apiCount) || apiCount < 0) {
-            console.log(
-              `❌ Invalid NoOfAPI for subscription ${s._id}: ${s.NoOfAPI}`
-            );
-            return sum;
-          }
-          return sum + apiCount;
+          return isNaN(apiCount) || apiCount < 0 ? sum : sum + apiCount;
         }, 0);
 
         console.log(
-          `🔍 Broker Type: ${type}, Total API slots: ${totalAPI}, Brokers: ${list.length}`
+          `🔍 ${type}: ${totalAPI} API slots, ${list.length} brokers`
         );
-
-        // Assign canActivate: false if no API slots are available
-        if (totalAPI === 0) {
-          list.forEach((broker) => {
-            const plain = { ...broker, canActivate: false };
-            result.push(plain);
-            console.log(
-              ` ➡ Broker ${broker.clientId} (${broker.broker}): No API slots, canActivate=false`
-            );
-          });
-        } else {
-          list.forEach((broker, index) => {
-            const canActivate = index < totalAPI;
-            const plain = { ...broker, canActivate };
-            result.push(plain);
-            console.log(
-              ` ➡ Broker ${broker.clientId} (${broker.broker}): index=${index}, totalAPI=${totalAPI}, canActivate=${canActivate}`
-            );
-          });
-        }
       }
 
-      // Update user if needed
       if (userNeedsUpdate) {
         try {
           await User.updateOne(
             { Email: user.Email },
             { $set: { ListOfBrokers: updatedBrokers } }
           );
-          console.log(`✅ User ${user.Email} broker status updated in DB`);
           notifyBrokerStatusUpdate(user.Email, {
-            brokers: result,
+            brokers: updatedBrokers,
             dbUpdated: true,
           });
         } catch (err) {
@@ -429,20 +288,21 @@ cron.schedule("*/60 * * * * *", async () => {
             err.message
           );
           notifyBrokerStatusUpdate(user.Email, {
-            brokers: result,
+            brokers: updatedBrokers,
             dbUpdated: false,
           });
         }
       } else {
-        console.log(`ℹ No broker status change needed for ${user.Email}`);
         notifyBrokerStatusUpdate(user.Email, {
-          brokers: result,
+          brokers: updatedBrokers,
           dbUpdated: false,
         });
       }
     }
+
+    console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>> complete");
   } catch (error) {
-    console.error("❌ Cron job error:", error.message, error.stack);
+    console.error("❌ Cron job error:", error.message);
   }
 });
 
@@ -451,9 +311,9 @@ app.get("/trigger-cron", async (req, res) => {
     await require("./server").cron();
     res.status(200).json({ message: "Cron triggered successfully" });
   } catch (err) {
-    console.error("❌ Manual cron trigger error:", err.message, err.stack);
+    console.error("❌ Manual cron trigger error:", err.message);
     res.status(500).json({ error: "Failed to trigger cron" });
   }
 });
 
-app.listen(PORT, () => console.log("Server running on port 8080"));
+app.listen(8080, () => console.log("Server running on port 8080"));
