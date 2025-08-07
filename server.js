@@ -7,6 +7,7 @@ const APIModel = require("./models/Api");
 const Subscription = require("./models/Subscription.js");
 const bodyParser = require("body-parser");
 const cors = require("cors");
+const PORT = process.env.PORT || 8080;
 
 const app = express();
 
@@ -201,7 +202,7 @@ cron.schedule("*/60 * * * * *", async () => {
 
           try {
             const updateResult = await APIModel.updateOne(
-              { "Apis.ApiID": broker.clientId, XAlgoID: user.XalgoID },
+              { "Apis.ApiID": broker.clientId, XAlgoID: "XAlgoID" },
               { $set: { "Apis.$.IsActive": shouldBeActive } }
             );
             if (updateResult.matchedCount === 0) {
@@ -316,4 +317,4 @@ app.get("/trigger-cron", async (req, res) => {
   }
 });
 
-app.listen(8080, () => console.log("Server running on port 8080"));
+app.listen(PORT, () => console.log("Server running on port 8080"));
