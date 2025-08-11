@@ -150,6 +150,8 @@ cron.schedule("*/60 * * * * *", async () => {
         XalgoID: user.XalgoID,
       }).lean();
 
+      console.log("subcription", subscriptions);
+
       let userNeedsUpdate = false;
       const brokers = [...(user.ListOfBrokers || [])];
       const updatedBrokers = [];
@@ -252,12 +254,16 @@ cron.schedule("*/60 * * * * *", async () => {
           }
 
           const createdAt = moment(s.CreatedAt);
-          const expiresAt = createdAt.clone().add(durationDays, "days");
+          const expiresAt = createdAt
+            .clone()
+            .add(durationDays, "days")
+            .add(1, "day") // move to next day
+            .startOf("day"); // set to 00:00:00
           const isValid = now.isBefore(expiresAt);
 
           if (isValid) {
             console.log(
-              `✅ Valid subscription for ${type}: ID=${s._id}, NoOfAPI=${s.NoOfAPI}`
+              `✅ Valid subscription for ${type}: ID=${s._id}, NoOfAPI=${s.NoOfAPI}   ===== ${isValid}`
             );
           }
           return isValid;
@@ -300,8 +306,8 @@ cron.schedule("*/60 * * * * *", async () => {
         });
       }
     }
-
-    console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>> complete");
+    const formatted = moment().format("DD MM YYYY [at] HH : mm : ss");
+    console.log(`>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> complete ${formatted} `);
   } catch (error) {
     console.error("❌ Cron job error:", error.message);
   }
