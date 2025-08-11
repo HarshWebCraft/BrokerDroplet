@@ -169,6 +169,10 @@ cron.schedule("*/60 * * * * *", async () => {
         }
 
         let isWithinTimeWindow = false;
+
+
+
+
         for (const time of broker.tradingTimes) {
           const start = moment.tz(tz).set({
             year: now.year(),
@@ -178,7 +182,8 @@ cron.schedule("*/60 * * * * *", async () => {
             minute: parseInt(time.startMinute, 10),
             second: 0,
           });
-          const end = moment.tz(tz).set({
+
+          let end = moment.tz(tz).set({
             year: now.year(),
             month: now.month(),
             date: now.date(),
@@ -186,6 +191,10 @@ cron.schedule("*/60 * * * * *", async () => {
             minute: parseInt(time.endMinute, 10),
             second: 0,
           });
+
+          if (parseInt(time.endHour, 10) < parseInt(time.startHour, 10)) {
+            end.add(1, "day");
+          }
 
           if (now.isSameOrAfter(start) && now.isBefore(end)) {
             isWithinTimeWindow = true;
